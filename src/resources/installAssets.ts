@@ -3,8 +3,21 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as yaml from "yaml";
-import { spawnSync, spawn } from "child_process";
+import { spawn } from "child_process";
 import * as ipaddr from "ipaddr.js";
+
+const run = (cmd: string, args: string[], opts: any) =>
+  new Promise<void>((resolve, reject) => {
+    const proc = spawn(cmd, args, opts);
+    proc.on("error", reject);
+    proc.on("close", code => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`${cmd} exited with code ${code}`));
+      }
+    });
+  });
 
 export interface NetworkingArgs {
   clusterCIDR: pulumi.Input<string>;
@@ -183,10 +196,7 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
     if (inputs.mirror?.registriesConf) {
       args.push("--registry-config", inputs.mirror.registriesConf);
     }
-    const res = spawnSync("openshift-install", args, { env, stdio: "inherit" });
-    if (res.status !== 0) {
-      throw new Error("openshift-install image creation failed");
-    }
+    await run("openshift-install", args, { env, stdio: "inherit" });
 
     if (inputs.emitPXE) {
       const pxeArgs = ["agent", "create", "pxe-files", "--dir", workdir];
@@ -196,10 +206,7 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
       if (inputs.mirror?.registriesConf) {
         pxeArgs.push("--registry-config", inputs.mirror.registriesConf);
       }
-      const pres = spawnSync("openshift-install", pxeArgs, { env, stdio: "inherit" });
-      if (pres.status !== 0) {
-        throw new Error("openshift-install PXE artifact creation failed");
-      }
+      await run("openshift-install", pxeArgs, { env, stdio: "inherit" });
     }
 
     const isoPath = path.join(workdir, "agent.x86_64.iso");

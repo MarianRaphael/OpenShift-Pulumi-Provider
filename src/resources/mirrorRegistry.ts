@@ -3,6 +3,13 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+/**
+ * MirrorRegistry is a lightweight helper that writes out placeholder files for
+ * registry configuration. **It does not perform any image mirroring.** Users
+ * should run `oc mirror` or a similar tool separately to populate the mirror
+ * registry referenced by this resource.
+ */
+
 export interface MirrorRegistryArgs {
   enabled: pulumi.Input<boolean>;
   archivePath?: pulumi.Input<string>;
