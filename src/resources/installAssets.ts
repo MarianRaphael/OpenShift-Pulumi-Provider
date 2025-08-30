@@ -3,11 +3,12 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as yaml from "yaml";
-import { execSync } from "child_process";
+import { spawnSync, spawn } from "child_process";
 import * as ipaddr from "ipaddr.js";
 
 export interface NetworkingArgs {
   clusterCIDR: pulumi.Input<string>;
+  hostPrefix: pulumi.Input<number>;
   serviceCIDR: pulumi.Input<string>;
   machineCIDR: pulumi.Input<string>;
   networkType?: pulumi.Input<string>;
@@ -16,7 +17,9 @@ export interface NetworkingArgs {
 export interface AgentHostArgs {
   hostname?: pulumi.Input<string>;
   role?: pulumi.Input<string>;
-  networkConfig: pulumi.Input<any>;
+  macToIface?: pulumi.Input<{ [mac: string]: string }>;
+  networkConfig?: pulumi.Input<any>;
+  rootDeviceHints?: pulumi.Input<any>;
 }
 
 export interface AgentArgs {
@@ -61,6 +64,14 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
     if (!inputs.networking.networkType) {
       inputs.networking.networkType = "OVNKubernetes";
     }
+    if (inputs.networking.networkType !== "OVNKubernetes") {
+      throw new Error("Only OVNKubernetes networkType is supported");
+    }
+
+    // Replica validation
+    if (inputs.controlPlaneReplicas !== 3) {
+      throw new Error("controlPlaneReplicas must be 3 for HA clusters");
+    }
 
     // Basic CIDR overlap validation
     const cidrs = [inputs.networking.clusterCIDR, inputs.networking.serviceCIDR, inputs.networking.machineCIDR];
@@ -84,7 +95,14 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
       apiVersion: "v1",
       baseDomain: inputs.baseDomain,
       metadata: { name: inputs.clusterName },
-      networking: inputs.networking,
+      networking: {
+        networkType: inputs.networking.networkType,
+        clusterNetwork: [
+          { cidr: inputs.networking.clusterCIDR, hostPrefix: inputs.networking.hostPrefix },
+        ],
+        serviceNetwork: [inputs.networking.serviceCIDR],
+        machineNetwork: [{ cidr: inputs.networking.machineCIDR }],
+      },
       compute: [{ name: "worker", replicas: inputs.computeReplicas }],
       controlPlane: { name: "master", replicas: inputs.controlPlaneReplicas },
       platform: { none: {} },
@@ -94,33 +112,50 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
 
     // Mirror / disconnected support
     if (inputs.mirror?.endpoint) {
+      if (!inputs.mirror.caBundlePath || !inputs.mirror.registriesConf) {
+        throw new Error("Mirror requires caBundlePath and registriesConf");
+      }
       installConfig.imageContentSources = [
         { source: "quay.io/openshift-release-dev/ocp-release", mirrors: [inputs.mirror.endpoint] },
         { source: "quay.io/openshift-release-dev/ocp-v4.0-art-dev", mirrors: [inputs.mirror.endpoint] },
       ];
-    }
-    if (inputs.mirror?.caBundlePath) {
       installConfig.additionalTrustBundle = fs.readFileSync(inputs.mirror.caBundlePath, "utf8");
     }
 
     fs.writeFileSync(path.join(workdir, "install-config.yaml"), yaml.stringify(installConfig));
 
     const machineNet = ipaddr.parseCIDR(inputs.networking.machineCIDR);
+    if (inputs.agent?.rendezvousIP) {
+      const rv = ipaddr.parse(inputs.agent.rendezvousIP);
+      if (!rv.match(machineNet[0], machineNet[1])) {
+        throw new Error("rendezvousIP must be within machineCIDR");
+      }
+    }
+
     const hosts = (inputs.agent?.hosts || []).map((h: any) => {
-      const cfg = typeof h.networkConfig === "string" ? yaml.parse(h.networkConfig) : h.networkConfig;
-      const interfaces = cfg?.interfaces || [];
-      interfaces.forEach((iface: any) => {
-        (iface.ipv4?.address || []).forEach((addr: any) => {
-          if (!ipaddr.parse(addr.ip).match(machineNet[0], machineNet[1])) {
-            throw new Error(`Host ${h.hostname || ""} IP ${addr.ip} not in machineCIDR`);
-          }
+      const host: any = { hostname: h.hostname, role: h.role };
+      if (h.macToIface) {
+        host.networkInterfaces = Object.entries(h.macToIface).map(([mac, name]) => ({
+          name,
+          macAddress: mac,
+        }));
+      }
+      if (h.networkConfig) {
+        const cfg = typeof h.networkConfig === "string" ? yaml.parse(h.networkConfig) : h.networkConfig;
+        const interfaces = cfg?.interfaces || [];
+        interfaces.forEach((iface: any) => {
+          (iface.ipv4?.address || []).forEach((addr: any) => {
+            if (!ipaddr.parse(addr.ip).match(machineNet[0], machineNet[1])) {
+              throw new Error(`Host ${h.hostname || ""} IP ${addr.ip} not in machineCIDR`);
+            }
+          });
         });
-      });
-      return {
-        hostname: h.hostname,
-        role: h.role,
-        networkConfig: h.networkConfig,
-      };
+        host.networkConfig = h.networkConfig;
+      }
+      if (h.rootDeviceHints) {
+        host.rootDeviceHints = h.rootDeviceHints;
+      }
+      return host;
     });
 
     const agentConfig = {
@@ -140,24 +175,30 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
       env.OPENSHIFT_INSTALL_RELEASE_IMAGE = inputs.releaseImage;
     }
 
-    let cmd = `openshift-install agent create image --dir ${workdir}`;
+    const args = ["agent", "create", "image", "--dir", workdir, "--log-level=info"];
     if (inputs.releaseImage) {
-      cmd += ` --release-image ${inputs.releaseImage}`;
+      args.push("--release-image", inputs.releaseImage);
     }
     if (inputs.mirror?.registriesConf) {
-      cmd += ` --registry-config ${inputs.mirror.registriesConf}`;
+      args.push("--registry-config", inputs.mirror.registriesConf);
     }
-    execSync(cmd, { env, stdio: "inherit" });
+    const res = spawnSync("openshift-install", args, { env, stdio: "inherit" });
+    if (res.status !== 0) {
+      throw new Error("openshift-install image creation failed");
+    }
 
     if (inputs.emitPXE) {
-      let pxeCmd = `openshift-install agent create boot-artifacts --dir ${workdir}`;
+      const pxeArgs = ["agent", "create", "boot-artifacts", "--dir", workdir];
       if (inputs.releaseImage) {
-        pxeCmd += ` --release-image ${inputs.releaseImage}`;
+        pxeArgs.push("--release-image", inputs.releaseImage);
       }
       if (inputs.mirror?.registriesConf) {
-        pxeCmd += ` --registry-config ${inputs.mirror.registriesConf}`;
+        pxeArgs.push("--registry-config", inputs.mirror.registriesConf);
       }
-      execSync(pxeCmd, { env, stdio: "inherit" });
+      const pres = spawnSync("openshift-install", pxeArgs, { env, stdio: "inherit" });
+      if (pres.status !== 0) {
+        throw new Error("openshift-install PXE artifact creation failed");
+      }
     }
 
     const isoPath = path.join(workdir, "agent.x86_64.iso");
@@ -165,6 +206,12 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
     let isoURL: string | undefined;
     if (inputs.serveFrom) {
       const port = inputs.serveFrom.port || 8080;
+      const server = spawn("python3", ["-m", "http.server", `${port}`, "--bind", inputs.serveFrom.address], {
+        cwd: workdir,
+        stdio: "inherit",
+        detached: true,
+      });
+      server.unref();
       isoURL = `http://${inputs.serveFrom.address}:${port}/agent.x86_64.iso`;
     }
 

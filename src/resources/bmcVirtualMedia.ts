@@ -1,4 +1,5 @@
 import * as pulumi from "@pulumi/pulumi";
+declare const fetch: any;
 
 export interface BmcVirtualMediaArgs {
   redfishEndpoint: pulumi.Input<string>;
@@ -24,7 +25,7 @@ class BmcProvider implements pulumi.dynamic.ResourceProvider {
 
     const base = inputs.redfishEndpoint.replace(/\/$/, "");
     const media = inputs.bootDevice || "Cd";
-    const insertUrl = `${base}/redfish/v1/Managers/1/VirtualMedia/${media}/Actions/VirtualMedia.InsertMedia`;
+  const insertUrl = `${base}/redfish/v1/Managers/1/VirtualMedia/${media}/Actions/VirtualMedia.InsertMedia`;
 
     let mounted = false;
     let lastTaskState = "unknown";
@@ -34,10 +35,32 @@ class BmcProvider implements pulumi.dynamic.ResourceProvider {
         headers,
         body: JSON.stringify({ Image: inputs.isoURL, Inserted: true }),
       });
-      mounted = true;
-      lastTaskState = "Inserted";
+      // wait for media to be inserted
+      const mediaStatus = `${base}/redfish/v1/Managers/1/VirtualMedia/${media}`;
+      for (let i = 0; i < 30; i++) {
+        const res = await fetch(mediaStatus, { headers });
+        const info = await res.json();
+        if (info.Inserted) {
+          mounted = true;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      lastTaskState = mounted ? "Inserted" : "Timeout";
     } catch (e: any) {
       lastTaskState = `error: ${e.message}`;
+    }
+
+    // Set boot device
+    const bootUrl = `${base}/redfish/v1/Systems/1`;
+    try {
+      await fetch(bootUrl, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ Boot: { BootSourceOverrideTarget: media, BootSourceOverrideEnabled: "Once" } }),
+      });
+    } catch {
+      // ignore
     }
 
     if (inputs.powerAction) {
