@@ -9,7 +9,6 @@ export interface OpenshiftAgentClusterArgs extends InstallAssetsArgs {
 
 export class OpenshiftAgentCluster extends pulumi.ComponentResource {
   public readonly kubeconfig: pulumi.Output<string>;
-  public readonly consoleURL: pulumi.Output<string>;
 
   constructor(name: string, args: OpenshiftAgentClusterArgs, opts?: pulumi.ComponentResourceOptions) {
     super("openshiftagent:OpenshiftAgentCluster", name, {}, opts);
@@ -30,8 +29,7 @@ export class OpenshiftAgentCluster extends pulumi.ComponentResource {
     const install = new AgentInstall(`${name}-install`, { workdir: assets.workdir }, { parent: this, dependsOn: boots });
 
     this.kubeconfig = install.kubeconfig;
-    this.consoleURL = install.consoleURL;
 
-    this.registerOutputs({ kubeconfig: this.kubeconfig, consoleURL: this.consoleURL });
+    this.registerOutputs({ kubeconfig: this.kubeconfig });
   }
 }
