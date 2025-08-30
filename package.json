@@ -1,0 +1,22 @@
+{
+  "name": "openshift-pulumi-provider",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@pulumi/pulumi": "^3.192.0",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  },
+  "types": "dist/index.d.ts"
+}
