@@ -68,9 +68,10 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
       throw new Error("Only OVNKubernetes networkType is supported");
     }
 
-    // Replica validation
-    if (inputs.controlPlaneReplicas !== 3) {
-      throw new Error("controlPlaneReplicas must be 3 for HA clusters");
+    // Replica validation: allow SNO (1) or HA (>=3)
+    const cpr = Number(inputs.controlPlaneReplicas);
+    if (!(cpr === 1 || cpr >= 3)) {
+      throw new Error("controlPlaneReplicas must be 1 (SNO) or >= 3 (HA)");
     }
 
     // Basic CIDR overlap validation
@@ -159,7 +160,7 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
     });
 
     const agentConfig = {
-      apiVersion: "v1alpha1",
+      apiVersion: "v1beta1",
       kind: "AgentConfig",
       rendezvousIP: inputs.agent?.rendezvousIP,
       hosts,
@@ -188,7 +189,7 @@ class InstallAssetsProvider implements pulumi.dynamic.ResourceProvider {
     }
 
     if (inputs.emitPXE) {
-      const pxeArgs = ["agent", "create", "boot-artifacts", "--dir", workdir];
+      const pxeArgs = ["agent", "create", "pxe-files", "--dir", workdir];
       if (inputs.releaseImage) {
         pxeArgs.push("--release-image", inputs.releaseImage);
       }
