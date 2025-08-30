@@ -25,7 +25,7 @@ class BmcProvider implements pulumi.dynamic.ResourceProvider {
 
     const base = inputs.redfishEndpoint.replace(/\/$/, "");
     const media = inputs.bootDevice || "Cd";
-  const insertUrl = `${base}/redfish/v1/Managers/1/VirtualMedia/${media}/Actions/VirtualMedia.InsertMedia`;
+    const insertUrl = `${base}/redfish/v1/Managers/1/VirtualMedia/${media}/Actions/VirtualMedia.InsertMedia`;
 
     let mounted = false;
     let lastTaskState = "unknown";
@@ -47,8 +47,11 @@ class BmcProvider implements pulumi.dynamic.ResourceProvider {
         await new Promise(r => setTimeout(r, 2000));
       }
       lastTaskState = mounted ? "Inserted" : "Timeout";
+      if (!mounted) {
+        throw new Error("Timed out waiting for virtual media to insert");
+      }
     } catch (e: any) {
-      lastTaskState = `error: ${e.message}`;
+      throw new Error(`Virtual media insert failed: ${e.message}`);
     }
 
     // Set boot device
@@ -73,7 +76,7 @@ class BmcProvider implements pulumi.dynamic.ResourceProvider {
         });
         lastTaskState = inputs.powerAction;
       } catch (e: any) {
-        lastTaskState = `error: ${e.message}`;
+        throw new Error(`Power action failed: ${e.message}`);
       }
     }
 

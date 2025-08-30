@@ -24,7 +24,7 @@ npm test
 
 The provider exports the following resources:
 
-- `MirrorRegistry` – prepares a local mirror registry and returns paths to the generated configuration files.
+- `MirrorRegistry` – writes placeholder registry configuration files. It does **not** mirror images; run `oc mirror` separately if a registry mirror is required.
 - `InstallAssets` – creates agent-based installer assets such as the installation ISO and optional PXE files.
 - `BmcVirtualMedia` – mounts an ISO to a host's BMC via Redfish and can trigger power actions.
 - `AgentInstall` – waits for the installation to finish and exposes the kubeconfig and kubeadmin password.

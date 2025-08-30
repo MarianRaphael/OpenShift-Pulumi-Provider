@@ -17,18 +17,25 @@ export class OpenshiftAgentCluster extends pulumi.ComponentResource {
 
     const assets = new InstallAssets(`${name}-assets`, assetArgs, { parent: this });
 
-    const boots: BmcVirtualMedia[] = [];
+    let install: pulumi.Output<AgentInstall>;
     if (bmc) {
-      pulumi.output(bmc).apply(hosts => {
-        hosts.forEach((h, idx) => {
-          boots.push(new BmcVirtualMedia(`${name}-bmc-${idx}`, h, { parent: this }));
-        });
+      install = pulumi.all([pulumi.output(bmc)]).apply(([hosts]) => {
+        const boots = hosts.map((h, idx) =>
+          new BmcVirtualMedia(`${name}-bmc-${idx}`, h, { parent: this })
+        );
+        return new AgentInstall(
+          `${name}-install`,
+          { workdir: assets.workdir },
+          { parent: this, dependsOn: boots }
+        );
       });
+    } else {
+      install = pulumi.output(
+        new AgentInstall(`${name}-install`, { workdir: assets.workdir }, { parent: this })
+      );
     }
 
-    const install = new AgentInstall(`${name}-install`, { workdir: assets.workdir }, { parent: this, dependsOn: boots });
-
-    this.kubeconfig = install.kubeconfig;
+    this.kubeconfig = install.apply(i => i.kubeconfig);
 
     this.registerOutputs({ kubeconfig: this.kubeconfig });
   }
