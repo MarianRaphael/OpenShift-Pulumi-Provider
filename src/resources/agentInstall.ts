@@ -1,6 +1,8 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
+import * as yaml from "yaml";
 
 export interface AgentInstallArgs {
   workdir: pulumi.Input<string>;
@@ -15,18 +17,26 @@ export interface AgentInstallOutputs {
 
 class AgentInstallProvider implements pulumi.dynamic.ResourceProvider {
   public async create(inputs: any): Promise<pulumi.dynamic.CreateResult> {
+    const env = { ...process.env };
+    execSync(`openshift-install agent wait-for install-complete --dir ${inputs.workdir} --log-level=debug`, { env, stdio: "inherit" });
+
     const authDir = path.join(inputs.workdir, "auth");
-    fs.mkdirSync(authDir, { recursive: true });
     const kubeconfigPath = path.join(authDir, "kubeconfig");
     const passwordPath = path.join(authDir, "kubeadmin-password");
-    fs.writeFileSync(kubeconfigPath, "apiVersion: v1\nclusters: []\n", { encoding: "utf8" });
-    fs.writeFileSync(passwordPath, "changeme", { encoding: "utf8" });
+
+    const kubeconfig = fs.readFileSync(kubeconfigPath, "utf8");
+    const kubeadminPassword = fs.readFileSync(passwordPath, "utf8");
+
+    const installCfgPath = path.join(inputs.workdir, "install-config.yaml");
+    const cfg = yaml.parse(fs.readFileSync(installCfgPath, "utf8"));
+    const consoleURL = `https://console-openshift-console.apps.${cfg.metadata.name}.${cfg.baseDomain}`;
+
     return {
       id: inputs.workdir,
       outs: {
-        kubeconfig: fs.readFileSync(kubeconfigPath, "utf8"),
-        kubeadminPassword: fs.readFileSync(passwordPath, "utf8"),
-        consoleURL: "https://console-openshift.example.com",
+        kubeconfig,
+        kubeadminPassword,
+        consoleURL,
       },
     };
   }
